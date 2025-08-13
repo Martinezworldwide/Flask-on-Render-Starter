@@ -1,13 +1,11 @@
 services:
   - type: web
-    name: flask-shop
+    name: flask-ecommerce-demo-fixed
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn -w ${WEB_CONCURRENCY:-2} -k gthread -b 0.0.0.0:$PORT wsgi:app
+    startCommand: gunicorn app:app
     autoDeploy: true
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
-      - key: SECRET_KEY
-        generateValue: true
