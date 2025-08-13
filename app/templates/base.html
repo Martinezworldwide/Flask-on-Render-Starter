@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Flask Shop</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <header class="container header">
+    <a class="brand" href="{{ url_for('main.index') }}">🛍️ Flask Shop</a>
+    <nav>
+      <a href="{{ url_for('main.cart_view') }}">Cart</a>
+      <a href="{{ url_for('checkout.checkout_page') }}">Checkout</a>
+      <a href="{{ url_for('main.admin_products') }}">Admin</a>
+      <a href="{{ url_for('auth.login') }}">Login</a>
+      <a href="{{ url_for('auth.register') }}">Register</a>
+    </nav>
+  </header>
+  <main class="container">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <ul class="flash">
+          {% for cat,msg in messages %}
+            <li class="{{cat}}">{{ msg }}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="container footer">
+    <small>© Flask Shop • Demo app</small>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block content %}
+  <h2>Checkout</h2>
+  {% if lines %}
+    <ul class="checkout-lines">
+      {% for l in lines %}
+        <li>{{ l.qty }} × {{ l.product.name }} — ${{ '%.2f' % (l.line_total_cents/100) }}</li>
+      {% endfor %}
+    </ul>
+    <p><strong>Total: ${{ '%.2f' % (total_cents/100) }}</strong></p>
+    <form method="post" action="{{ url_for('checkout.create_checkout') }}">
+      <label>Email (for receipt): <input type="email" name="email" placeholder="you@example.com"></label>
+      {% if stripe_enabled %}
+        <button class="primary">Pay with Stripe</button>
+        <p class="muted">Test mode: use 4242 4242 4242 4242, any future exp, any CVC & ZIP.</p>
+      {% else %}
+        <button class="primary">Mock Pay (no Stripe set)</button>
+        <p class="muted">Add STRIPE keys to enable real checkout.</p>
+      {% endif %}
+    </form>
+  {% else %}
+    <p>Your cart is empty.</p>
+  {% endif %}
+{% endblock %}

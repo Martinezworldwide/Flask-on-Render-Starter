@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<form class="search" method="get">
+  <input type="text" name="q" value="{{ q }}" placeholder="Search products...">
+  <button type="submit">Search</button>
+</form>
+<div class="grid">
+  {% for p in products %}
+    <div class="card">
+      <a href="{{ url_for('main.product_detail', pid=p.id) }}">
+        <img src="{{ p.image_url or 'https://picsum.photos/seed/' ~ p.id ~ '/480/300' }}" alt="{{ p.name }}">
+      </a>
+      <div class="card-body">
+        <h3>{{ p.name }}</h3>
+        <p class="price">${{ '%.2f' % (p.price_cents/100) }}</p>
+        <form method="post" action="{{ url_for('main.cart_add') }}">
+          <input type="hidden" name="product_id" value="{{ p.id }}">
+          <input type="number" name="qty" value="1" min="1">
+          <button>Add to Cart</button>
+        </form>
+      </div>
+    </div>
+  {% else %}
+    <p>No products yet. Visit <a href="{{ url_for('main.admin_products') }}">Admin</a> to add some.</p>
+  {% endfor %}
+</div>
+{% endblock %}

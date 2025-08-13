@@ -1,0 +1,641 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Code Browser</title>
+<style>body{font-family:ui-sans-serif,system-ui;max-width:1100px;margin:24px auto;padding:0 12px;} 
+summary{cursor:pointer;font-weight:600;margin:8px 0} pre{background:#0f172a;color:#e2e8f0;padding:12px;border-radius:12px;overflow:auto;}
+code{white-space:pre}</style></head>
+<body>
+<h1>Flask Shop — Code Browser</h1>
+<p>Click any filename to toggle its source:</p>
+<details><summary><code>wsgi.py</code></summary>
+<pre><code>from app import create_app
+app = create_app()
+</code></pre>
+</details><details><summary><code>.env.example</code></summary>
+<pre><code># Copy to .env (for local) or set as environment variables in Render
+SECRET_KEY=replace-me
+# DATABASE_URL is provided by Render when you add Postgres; for local sqlite leave blank
+# Stripe (optional)
+STRIPE_PUBLISHABLE_KEY=pk_test_xxx
+STRIPE_SECRET_KEY=sk_test_xxx
+</code></pre>
+</details><details><summary><code>requirements.txt</code></summary>
+<pre><code>Flask==3.0.3
+Flask-SQLAlchemy==3.1.1
+Flask-Login==0.6.3
+Flask-Session==0.8.0
+gunicorn==22.0.0
+stripe==10.8.0
+psycopg2-binary==2.9.9
+</code></pre>
+</details><details><summary><code>render.yaml</code></summary>
+<pre><code>services:
+  - type: web
+    name: flask-shop
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn -w ${WEB_CONCURRENCY:-2} -k gthread -b 0.0.0.0:$PORT wsgi:app
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: SECRET_KEY
+        generateValue: true
+</code></pre>
+</details><details><summary><code>README.md</code></summary>
+<pre><code># Flask Shop (Render-ready)
+
+A minimal, real e‑commerce demo:
+- Product catalog (searchable)
+- Session cart (server-side)
+- Checkout page
+- Optional Stripe Checkout integration
+- Simple admin to add products
+
+## Deploy on Render (via GitHub)
+1. Push this folder to a new GitHub repo.
+2. In Render: **New → Web Service → Build &amp; deploy from a Git repository**.
+3. Pick your repo; Render will use `render.yaml`. Click **Create Web Service**.
+4. (Optional) Add a **PostgreSQL** instance in Render. `DATABASE_URL` will be injected automatically.
+5. (Optional) Add `STRIPE_PUBLISHABLE_KEY` and `STRIPE_SECRET_KEY` env vars for live Stripe Checkout.
+
+## Local run
+```bash
+python3 -m venv .venv &amp;&amp; source .venv/bin/activate
+pip install -r requirements.txt
+export FLASK_APP=wsgi.py
+flask run --debug
+```
+
+## Seed some products
+Visit `/admin/products` to add items quickly (demo only; protect in production).
+
+## Routes
+- `/` — product list &amp; search
+- `/product/&lt;id&gt;` — details
+- `/cart` — view/update/clear cart
+- `/checkout` — checkout page; posts to `/checkout/pay`
+- `/checkout/success` — success page
+- `/auth/login`, `/auth/register` — basic auth
+- `/admin/products` — add/list products (no auth gate in demo)
+</code></pre>
+</details><details><summary><code>app/__init__.py</code></summary>
+<pre><code>import os
+from flask import Flask
+from flask_sqlalchemy import SQLAlchemy
+from flask_login import LoginManager
+from flask_session import Session
+
+db = SQLAlchemy()
+login_manager = LoginManager()
+
+def normalize_db_url(url: str) -&gt; str:
+    # Render often provides postgres://; SQLAlchemy prefers postgresql://
+    return url.replace(&quot;postgres://&quot;, &quot;postgresql://&quot;, 1) if url.startswith(&quot;postgres://&quot;) else url
+
+def create_app():
+    app = Flask(__name__, template_folder=&quot;templates&quot;, static_folder=&quot;static&quot;)
+    app.config[&quot;SECRET_KEY&quot;] = os.environ.get(&quot;SECRET_KEY&quot;, &quot;dev-secret-change-me&quot;)
+    # Prefer DATABASE_URL (Render), else fall back to local sqlite
+    db_url = os.environ.get(&quot;DATABASE_URL&quot;)
+    if db_url:
+        app.config[&quot;SQLALCHEMY_DATABASE_URI&quot;] = normalize_db_url(db_url)
+    else:
+        app.config[&quot;SQLALCHEMY_DATABASE_URI&quot;] = &quot;sqlite:///shop.db&quot;
+    app.config[&quot;SQLALCHEMY_TRACK_MODIFICATIONS&quot;] = False
+
+    # Server-side sessions to keep cart stable across workers
+    app.config[&quot;SESSION_TYPE&quot;] = &quot;filesystem&quot;
+    Session(app)
+
+    db.init_app(app)
+    login_manager.init_app(app)
+    login_manager.login_view = &quot;auth.login&quot;
+
+    from .models import User  # noqa
+
+    # Blueprints
+    from .routes import bp as main_bp
+    from .auth import bp as auth_bp
+    from .checkout import bp as checkout_bp
+    app.register_blueprint(main_bp)
+    app.register_blueprint(auth_bp, url_prefix=&quot;/auth&quot;)
+    app.register_blueprint(checkout_bp, url_prefix=&quot;/checkout&quot;)
+
+    # Create tables if they don&#x27;t exist
+    with app.app_context():
+        db.create_all()
+
+    return app
+</code></pre>
+</details><details><summary><code>app/models.py</code></summary>
+<pre><code>from datetime import datetime
+from flask_login import UserMixin
+from werkzeug.security import generate_password_hash, check_password_hash
+from . import db, login_manager
+
+class User(UserMixin, db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password_hash = db.Column(db.String(255), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
+
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
+
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(int(user_id))
+
+class Product(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    sku = db.Column(db.String(64), unique=True, nullable=False)
+    name = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text, default=&quot;&quot;)
+    price_cents = db.Column(db.Integer, nullable=False)
+    image_url = db.Column(db.String(500), default=&quot;&quot;)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+class Order(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_email = db.Column(db.String(120), nullable=True)  # store email even for guest checkout
+    total_cents = db.Column(db.Integer, nullable=False)
+    stripe_session_id = db.Column(db.String(200), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    items = db.relationship(&quot;OrderItem&quot;, backref=&quot;order&quot;, lazy=True, cascade=&quot;all, delete-orphan&quot;)
+
+class OrderItem(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    order_id = db.Column(db.Integer, db.ForeignKey(&quot;order.id&quot;), nullable=False)
+    product_id = db.Column(db.Integer, db.ForeignKey(&quot;product.id&quot;), nullable=False)
+    quantity = db.Column(db.Integer, nullable=False, default=1)
+    unit_price_cents = db.Column(db.Integer, nullable=False)
+    product = db.relationship(&quot;Product&quot;)
+</code></pre>
+</details><details><summary><code>app/auth.py</code></summary>
+<pre><code>from flask import Blueprint, render_template, request, redirect, url_for, flash
+from flask_login import login_user, logout_user, login_required
+from .models import User
+from . import db
+
+bp = Blueprint(&quot;auth&quot;, __name__)
+
+@bp.route(&quot;/login&quot;, methods=[&quot;GET&quot;, &quot;POST&quot;])
+def login():
+    if request.method == &quot;POST&quot;:
+        email = request.form.get(&quot;email&quot;, &quot;&quot;).strip().lower()
+        password = request.form.get(&quot;password&quot;, &quot;&quot;)
+        user = User.query.filter_by(email=email).first()
+        if user and user.check_password(password):
+            login_user(user)
+            return redirect(url_for(&quot;main.index&quot;))
+        flash(&quot;Invalid credentials.&quot;, &quot;error&quot;)
+    return render_template(&quot;login.html&quot;)
+
+@bp.route(&quot;/register&quot;, methods=[&quot;GET&quot;, &quot;POST&quot;])
+def register():
+    if request.method == &quot;POST&quot;:
+        email = request.form.get(&quot;email&quot;, &quot;&quot;).strip().lower()
+        password = request.form.get(&quot;password&quot;, &quot;&quot;)
+        if not email or not password:
+            flash(&quot;Email and password are required.&quot;, &quot;error&quot;)
+            return render_template(&quot;register.html&quot;)
+        if User.query.filter_by(email=email).first():
+            flash(&quot;Email already registered.&quot;, &quot;error&quot;)
+            return render_template(&quot;register.html&quot;)
+        u = User(email=email)
+        u.set_password(password)
+        db.session.add(u)
+        db.session.commit()
+        login_user(u)
+        return redirect(url_for(&quot;main.index&quot;))
+    return render_template(&quot;register.html&quot;)
+
+@bp.route(&quot;/logout&quot;)
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for(&quot;main.index&quot;))
+</code></pre>
+</details><details><summary><code>app/routes.py</code></summary>
+<pre><code>from flask import Blueprint, render_template, request, redirect, url_for, session, flash
+from .models import Product
+from . import db
+
+bp = Blueprint(&quot;main&quot;, __name__)
+
+def _cart():
+    return session.setdefault(&quot;cart&quot;, {})  # {product_id: qty}
+
+@bp.route(&quot;/&quot;)
+def index():
+    q = request.args.get(&quot;q&quot;)
+    query = Product.query
+    if q:
+        like = f&quot;%{q}%&quot;
+        query = query.filter(Product.name.ilike(like) | Product.description.ilike(like))
+    products = query.order_by(Product.created_at.desc()).all()
+    return render_template(&quot;index.html&quot;, products=products, q=q or &quot;&quot;)
+
+@bp.route(&quot;/product/&lt;int:pid&gt;&quot;)
+def product_detail(pid):
+    p = Product.query.get_or_404(pid)
+    return render_template(&quot;product_detail.html&quot;, p=p)
+
+@bp.route(&quot;/cart&quot;)
+def cart_view():
+    cart = _cart()
+    ids = [int(pid) for pid in cart.keys()]
+    products = Product.query.filter(Product.id.in_(ids)).all() if ids else []
+    lines = []
+    total_cents = 0
+    for p in products:
+        qty = int(cart.get(str(p.id), 0))
+        if qty &lt;= 0:
+            continue
+        line_total = qty * p.price_cents
+        total_cents += line_total
+        lines.append({&quot;product&quot;: p, &quot;qty&quot;: qty, &quot;line_total_cents&quot;: line_total})
+    return render_template(&quot;cart.html&quot;, lines=lines, total_cents=total_cents)
+
+@bp.route(&quot;/cart/add&quot;, methods=[&quot;POST&quot;])
+def cart_add():
+    pid = request.form.get(&quot;product_id&quot;)
+    qty = int(request.form.get(&quot;qty&quot;, 1))
+    cart = _cart()
+    cart[pid] = cart.get(pid, 0) + qty
+    session.modified = True
+    flash(&quot;Added to cart!&quot;, &quot;ok&quot;)
+    return redirect(request.referrer or url_for(&quot;main.cart_view&quot;))
+
+@bp.route(&quot;/cart/update&quot;, methods=[&quot;POST&quot;])
+def cart_update():
+    pid = request.form.get(&quot;product_id&quot;)
+    qty = max(0, int(request.form.get(&quot;qty&quot;, 0)))
+    cart = _cart()
+    if qty == 0:
+        cart.pop(pid, None)
+    else:
+        cart[pid] = qty
+    session.modified = True
+    return redirect(url_for(&quot;main.cart_view&quot;))
+
+@bp.route(&quot;/cart/clear&quot;, methods=[&quot;POST&quot;])
+def cart_clear():
+    session[&quot;cart&quot;] = {}
+    session.modified = True
+    return redirect(url_for(&quot;main.cart_view&quot;))
+
+# Simple admin: add products (no auth gate for demo; protect in production)
+@bp.route(&quot;/admin/products&quot;, methods=[&quot;GET&quot;, &quot;POST&quot;])
+def admin_products():
+    if request.method == &quot;POST&quot;:
+        name = request.form.get(&quot;name&quot;, &quot;&quot;)
+        sku = request.form.get(&quot;sku&quot;, &quot;&quot;)
+        price_cents = int(float(request.form.get(&quot;price&quot;, &quot;0&quot;)) * 100)
+        description = request.form.get(&quot;description&quot;, &quot;&quot;) or &quot;&quot;
+        image_url = request.form.get(&quot;image_url&quot;, &quot;&quot;) or &quot;&quot;
+        db.session.add(Product(name=name, sku=sku, price_cents=price_cents, description=description, image_url=image_url))
+        db.session.commit()
+        return redirect(url_for(&quot;main.admin_products&quot;))
+    products = Product.query.order_by(Product.created_at.desc()).all()
+    return render_template(&quot;admin_products.html&quot;, products=products)
+</code></pre>
+</details><details><summary><code>app/checkout.py</code></summary>
+<pre><code>import os
+from flask import Blueprint, render_template, request, redirect, url_for, session, flash
+from .models import Product, Order, OrderItem
+from . import db
+bp = Blueprint(&quot;checkout&quot;, __name__)
+
+STRIPE_SECRET = os.environ.get(&quot;STRIPE_SECRET_KEY&quot;)
+STRIPE_PUBLISHABLE = os.environ.get(&quot;STRIPE_PUBLISHABLE_KEY&quot;)
+
+@bp.app_context_processor
+def inject_keys():
+    return {&quot;STRIPE_PUBLISHABLE_KEY&quot;: STRIPE_PUBLISHABLE}
+
+def _cart_lines():
+    cart = session.get(&quot;cart&quot;, {})
+    ids = [int(pid) for pid in cart.keys()]
+    products = Product.query.filter(Product.id.in_(ids)).all() if ids else []
+    lines = []
+    total_cents = 0
+    for p in products:
+        qty = int(cart.get(str(p.id), 0))
+        if qty &lt;= 0:
+            continue
+        line_total = qty * p.price_cents
+        total_cents += line_total
+        lines.append({&quot;product&quot;: p, &quot;qty&quot;: qty, &quot;line_total_cents&quot;: line_total})
+    return lines, total_cents
+
+@bp.route(&quot;/&quot;, methods=[&quot;GET&quot;])
+def checkout_page():
+    lines, total_cents = _cart_lines()
+    return render_template(&quot;checkout.html&quot;, lines=lines, total_cents=total_cents, stripe_enabled=bool(STRIPE_SECRET))
+
+@bp.route(&quot;/pay&quot;, methods=[&quot;POST&quot;])
+def create_checkout():
+    # If Stripe keys are present, redirect to Stripe Checkout; else mock success
+    lines, total_cents = _cart_lines()
+    email = request.form.get(&quot;email&quot;, &quot;&quot;)
+    if not lines:
+        flash(&quot;Your cart is empty.&quot;, &quot;error&quot;)
+        return redirect(url_for(&quot;main.index&quot;))
+    if STRIPE_SECRET:
+        import stripe
+        stripe.api_key = STRIPE_SECRET
+        success_url = url_for(&quot;checkout.success&quot;, _external=True) + &quot;?session_id={CHECKOUT_SESSION_ID}&quot;
+        cancel_url = url_for(&quot;main.cart_view&quot;, _external=True)
+        session_obj = stripe.checkout.Session.create(
+            mode=&quot;payment&quot;,
+            success_url=success_url,
+            cancel_url=cancel_url,
+            customer_email=email or None,
+            line_items=[{
+                &quot;price_data&quot;: {
+                    &quot;currency&quot;: &quot;usd&quot;,
+                    &quot;product_data&quot;: {&quot;name&quot;: l[&quot;product&quot;].name},
+                    &quot;unit_amount&quot;: l[&quot;product&quot;].price_cents
+                },
+                &quot;quantity&quot;: l[&quot;qty&quot;]
+            } for l in lines]
+        )
+        return redirect(session_obj.url)
+    else:
+        # Mock order without Stripe for demo
+        order = Order(user_email=email or None, total_cents=total_cents, stripe_session_id=None)
+        db.session.add(order)
+        db.session.flush()
+        for l in lines:
+            db.session.add(OrderItem(order_id=order.id, product_id=l[&quot;product&quot;].id, quantity=l[&quot;qty&quot;], unit_price_cents=l[&quot;product&quot;].price_cents))
+        db.session.commit()
+        session[&quot;cart&quot;] = {}
+        return redirect(url_for(&quot;checkout.success&quot;))
+
+@bp.route(&quot;/success&quot;)
+def success():
+    # In real app, you&#x27;d verify the Stripe session and mark the order paid
+    return render_template(&quot;success.html&quot;)
+</code></pre>
+</details><details><summary><code>app/templates/base.html</code></summary>
+<pre><code>&lt;!doctype html&gt;
+&lt;html lang=&quot;en&quot;&gt;
+&lt;head&gt;
+  &lt;meta charset=&quot;utf-8&quot;&gt;
+  &lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1&quot;&gt;
+  &lt;title&gt;Flask Shop&lt;/title&gt;
+  &lt;link rel=&quot;stylesheet&quot; href=&quot;{{ url_for(&#x27;static&#x27;, filename=&#x27;styles.css&#x27;) }}&quot;&gt;
+&lt;/head&gt;
+&lt;body&gt;
+  &lt;header class=&quot;container header&quot;&gt;
+    &lt;a class=&quot;brand&quot; href=&quot;{{ url_for(&#x27;main.index&#x27;) }}&quot;&gt;🛍️ Flask Shop&lt;/a&gt;
+    &lt;nav&gt;
+      &lt;a href=&quot;{{ url_for(&#x27;main.cart_view&#x27;) }}&quot;&gt;Cart&lt;/a&gt;
+      &lt;a href=&quot;{{ url_for(&#x27;checkout.checkout_page&#x27;) }}&quot;&gt;Checkout&lt;/a&gt;
+      &lt;a href=&quot;{{ url_for(&#x27;main.admin_products&#x27;) }}&quot;&gt;Admin&lt;/a&gt;
+      &lt;a href=&quot;{{ url_for(&#x27;auth.login&#x27;) }}&quot;&gt;Login&lt;/a&gt;
+      &lt;a href=&quot;{{ url_for(&#x27;auth.register&#x27;) }}&quot;&gt;Register&lt;/a&gt;
+    &lt;/nav&gt;
+  &lt;/header&gt;
+  &lt;main class=&quot;container&quot;&gt;
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        &lt;ul class=&quot;flash&quot;&gt;
+          {% for cat,msg in messages %}
+            &lt;li class=&quot;{{cat}}&quot;&gt;{{ msg }}&lt;/li&gt;
+          {% endfor %}
+        &lt;/ul&gt;
+      {% endif %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  &lt;/main&gt;
+  &lt;footer class=&quot;container footer&quot;&gt;
+    &lt;small&gt;© Flask Shop • Demo app&lt;/small&gt;
+  &lt;/footer&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+</code></pre>
+</details><details><summary><code>app/templates/index.html</code></summary>
+<pre><code>{% extends &quot;base.html&quot; %}
+{% block content %}
+&lt;form class=&quot;search&quot; method=&quot;get&quot;&gt;
+  &lt;input type=&quot;text&quot; name=&quot;q&quot; value=&quot;{{ q }}&quot; placeholder=&quot;Search products...&quot;&gt;
+  &lt;button type=&quot;submit&quot;&gt;Search&lt;/button&gt;
+&lt;/form&gt;
+&lt;div class=&quot;grid&quot;&gt;
+  {% for p in products %}
+    &lt;div class=&quot;card&quot;&gt;
+      &lt;a href=&quot;{{ url_for(&#x27;main.product_detail&#x27;, pid=p.id) }}&quot;&gt;
+        &lt;img src=&quot;{{ p.image_url or &#x27;https://picsum.photos/seed/&#x27; ~ p.id ~ &#x27;/480/300&#x27; }}&quot; alt=&quot;{{ p.name }}&quot;&gt;
+      &lt;/a&gt;
+      &lt;div class=&quot;card-body&quot;&gt;
+        &lt;h3&gt;{{ p.name }}&lt;/h3&gt;
+        &lt;p class=&quot;price&quot;&gt;${{ &#x27;%.2f&#x27; % (p.price_cents/100) }}&lt;/p&gt;
+        &lt;form method=&quot;post&quot; action=&quot;{{ url_for(&#x27;main.cart_add&#x27;) }}&quot;&gt;
+          &lt;input type=&quot;hidden&quot; name=&quot;product_id&quot; value=&quot;{{ p.id }}&quot;&gt;
+          &lt;input type=&quot;number&quot; name=&quot;qty&quot; value=&quot;1&quot; min=&quot;1&quot;&gt;
+          &lt;button&gt;Add to Cart&lt;/button&gt;
+        &lt;/form&gt;
+      &lt;/div&gt;
+    &lt;/div&gt;
+  {% else %}
+    &lt;p&gt;No products yet. Visit &lt;a href=&quot;{{ url_for(&#x27;main.admin_products&#x27;) }}&quot;&gt;Admin&lt;/a&gt; to add some.&lt;/p&gt;
+  {% endfor %}
+&lt;/div&gt;
+{% endblock %}
+</code></pre>
+</details><details><summary><code>app/templates/product_detail.html</code></summary>
+<pre><code>{% extends &quot;base.html&quot; %}
+{% block content %}
+  &lt;div class=&quot;product-detail&quot;&gt;
+    &lt;img src=&quot;{{ p.image_url or &#x27;https://picsum.photos/seed/&#x27; ~ p.id ~ &#x27;/640/400&#x27; }}&quot; alt=&quot;{{ p.name }}&quot;&gt;
+    &lt;div&gt;
+      &lt;h2&gt;{{ p.name }}&lt;/h2&gt;
+      &lt;p&gt;{{ p.description }}&lt;/p&gt;
+      &lt;p class=&quot;price&quot;&gt;${{ &#x27;%.2f&#x27; % (p.price_cents/100) }}&lt;/p&gt;
+      &lt;form method=&quot;post&quot; action=&quot;{{ url_for(&#x27;main.cart_add&#x27;) }}&quot;&gt;
+        &lt;input type=&quot;hidden&quot; name=&quot;product_id&quot; value=&quot;{{ p.id }}&quot;&gt;
+        &lt;input type=&quot;number&quot; name=&quot;qty&quot; value=&quot;1&quot; min=&quot;1&quot;&gt;
+        &lt;button&gt;Add to Cart&lt;/button&gt;
+      &lt;/form&gt;
+    &lt;/div&gt;
+  &lt;/div&gt;
+{% endblock %}
+</code></pre>
+</details><details><summary><code>app/templates/cart.html</code></summary>
+<pre><code>{% extends &quot;base.html&quot; %}
+{% block content %}
+  &lt;h2&gt;Your Cart&lt;/h2&gt;
+  {% if lines %}
+    &lt;table class=&quot;cart&quot;&gt;
+      &lt;thead&gt;
+        &lt;tr&gt;&lt;th&gt;Product&lt;/th&gt;&lt;th&gt;Qty&lt;/th&gt;&lt;th&gt;Price&lt;/th&gt;&lt;th&gt;Total&lt;/th&gt;&lt;th&gt;&lt;/th&gt;&lt;/tr&gt;
+      &lt;/thead&gt;
+      &lt;tbody&gt;
+      {% for l in lines %}
+        &lt;tr&gt;
+          &lt;td&gt;{{ l.product.name }}&lt;/td&gt;
+          &lt;td&gt;
+            &lt;form method=&quot;post&quot; action=&quot;{{ url_for(&#x27;main.cart_update&#x27;) }}&quot;&gt;
+              &lt;input type=&quot;hidden&quot; name=&quot;product_id&quot; value=&quot;{{ l.product.id }}&quot;&gt;
+              &lt;input class=&quot;qty&quot; type=&quot;number&quot; name=&quot;qty&quot; min=&quot;0&quot; value=&quot;{{ l.qty }}&quot;&gt;
+              &lt;button&gt;Update&lt;/button&gt;
+            &lt;/form&gt;
+          &lt;/td&gt;
+          &lt;td&gt;${{ &#x27;%.2f&#x27; % (l.product.price_cents/100) }}&lt;/td&gt;
+          &lt;td&gt;${{ &#x27;%.2f&#x27; % (l.line_total_cents/100) }}&lt;/td&gt;
+          &lt;td&gt;
+            &lt;form method=&quot;post&quot; action=&quot;{{ url_for(&#x27;main.cart_update&#x27;) }}&quot;&gt;
+              &lt;input type=&quot;hidden&quot; name=&quot;product_id&quot; value=&quot;{{ l.product.id }}&quot;&gt;
+              &lt;input type=&quot;hidden&quot; name=&quot;qty&quot; value=&quot;0&quot;&gt;
+              &lt;button class=&quot;link&quot;&gt;Remove&lt;/button&gt;
+            &lt;/form&gt;
+          &lt;/td&gt;
+        &lt;/tr&gt;
+      {% endfor %}
+      &lt;/tbody&gt;
+    &lt;/table&gt;
+    &lt;div class=&quot;cart-summary&quot;&gt;
+      &lt;strong&gt;Subtotal: ${{ &#x27;%.2f&#x27; % (total_cents/100) }}&lt;/strong&gt;
+      &lt;div class=&quot;actions&quot;&gt;
+        &lt;form method=&quot;post&quot; action=&quot;{{ url_for(&#x27;main.cart_clear&#x27;) }}&quot;&gt;
+          &lt;button type=&quot;submit&quot; class=&quot;secondary&quot;&gt;Clear Cart&lt;/button&gt;
+        &lt;/form&gt;
+        &lt;a class=&quot;primary&quot; href=&quot;{{ url_for(&#x27;checkout.checkout_page&#x27;) }}&quot;&gt;Proceed to Checkout&lt;/a&gt;
+      &lt;/div&gt;
+    &lt;/div&gt;
+  {% else %}
+    &lt;p&gt;Your cart is empty.&lt;/p&gt;
+  {% endif %}
+{% endblock %}
+</code></pre>
+</details><details><summary><code>app/templates/checkout.html</code></summary>
+<pre><code>{% extends &quot;base.html&quot; %}
+{% block content %}
+  &lt;h2&gt;Checkout&lt;/h2&gt;
+  {% if lines %}
+    &lt;ul class=&quot;checkout-lines&quot;&gt;
+      {% for l in lines %}
+        &lt;li&gt;{{ l.qty }} × {{ l.product.name }} — ${{ &#x27;%.2f&#x27; % (l.line_total_cents/100) }}&lt;/li&gt;
+      {% endfor %}
+    &lt;/ul&gt;
+    &lt;p&gt;&lt;strong&gt;Total: ${{ &#x27;%.2f&#x27; % (total_cents/100) }}&lt;/strong&gt;&lt;/p&gt;
+    &lt;form method=&quot;post&quot; action=&quot;{{ url_for(&#x27;checkout.create_checkout&#x27;) }}&quot;&gt;
+      &lt;label&gt;Email (for receipt): &lt;input type=&quot;email&quot; name=&quot;email&quot; placeholder=&quot;you@example.com&quot;&gt;&lt;/label&gt;
+      {% if stripe_enabled %}
+        &lt;button class=&quot;primary&quot;&gt;Pay with Stripe&lt;/button&gt;
+        &lt;p class=&quot;muted&quot;&gt;Test mode: use 4242 4242 4242 4242, any future exp, any CVC &amp; ZIP.&lt;/p&gt;
+      {% else %}
+        &lt;button class=&quot;primary&quot;&gt;Mock Pay (no Stripe set)&lt;/button&gt;
+        &lt;p class=&quot;muted&quot;&gt;Add STRIPE keys to enable real checkout.&lt;/p&gt;
+      {% endif %}
+    &lt;/form&gt;
+  {% else %}
+    &lt;p&gt;Your cart is empty.&lt;/p&gt;
+  {% endif %}
+{% endblock %}
+</code></pre>
+</details><details><summary><code>app/templates/success.html</code></summary>
+<pre><code>{% extends &quot;base.html&quot; %}
+{% block content %}
+  &lt;div class=&quot;success&quot;&gt;
+    &lt;h2&gt;✅ Payment Successful&lt;/h2&gt;
+    &lt;p&gt;Thank you! Your order has been placed.&lt;/p&gt;
+    &lt;a href=&quot;{{ url_for(&#x27;main.index&#x27;) }}&quot;&gt;Continue shopping&lt;/a&gt;
+  &lt;/div&gt;
+{% endblock %}
+</code></pre>
+</details><details><summary><code>app/templates/login.html</code></summary>
+<pre><code>{% extends &quot;base.html&quot; %}
+{% block content %}
+  &lt;h2&gt;Login&lt;/h2&gt;
+  &lt;form method=&quot;post&quot;&gt;
+    &lt;label&gt;Email &lt;input type=&quot;email&quot; name=&quot;email&quot; required&gt;&lt;/label&gt;
+    &lt;label&gt;Password &lt;input type=&quot;password&quot; name=&quot;password&quot; required&gt;&lt;/label&gt;
+    &lt;button class=&quot;primary&quot;&gt;Login&lt;/button&gt;
+  &lt;/form&gt;
+{% endblock %}
+</code></pre>
+</details><details><summary><code>app/templates/register.html</code></summary>
+<pre><code>{% extends &quot;base.html&quot; %}
+{% block content %}
+  &lt;h2&gt;Register&lt;/h2&gt;
+  &lt;form method=&quot;post&quot;&gt;
+    &lt;label&gt;Email &lt;input type=&quot;email&quot; name=&quot;email&quot; required&gt;&lt;/label&gt;
+    &lt;label&gt;Password &lt;input type=&quot;password&quot; name=&quot;password&quot; required&gt;&lt;/label&gt;
+    &lt;button class=&quot;primary&quot;&gt;Create Account&lt;/button&gt;
+  &lt;/form&gt;
+{% endblock %}
+</code></pre>
+</details><details><summary><code>app/templates/admin_products.html</code></summary>
+<pre><code>{% extends &quot;base.html&quot; %}
+{% block content %}
+  &lt;h2&gt;Products (Admin)&lt;/h2&gt;
+  &lt;form class=&quot;admin-form&quot; method=&quot;post&quot;&gt;
+    &lt;input type=&quot;text&quot; name=&quot;name&quot; placeholder=&quot;Name&quot; required&gt;
+    &lt;input type=&quot;text&quot; name=&quot;sku&quot; placeholder=&quot;SKU&quot; required&gt;
+    &lt;input type=&quot;number&quot; step=&quot;0.01&quot; name=&quot;price&quot; placeholder=&quot;Price (USD)&quot; required&gt;
+    &lt;input type=&quot;url&quot; name=&quot;image_url&quot; placeholder=&quot;Image URL (optional)&quot;&gt;
+    &lt;textarea name=&quot;description&quot; placeholder=&quot;Description&quot;&gt;&lt;/textarea&gt;
+    &lt;button class=&quot;primary&quot;&gt;Add Product&lt;/button&gt;
+  &lt;/form&gt;
+  &lt;div class=&quot;grid&quot;&gt;
+    {% for p in products %}
+      &lt;div class=&quot;card&quot;&gt;
+        &lt;img src=&quot;{{ p.image_url or &#x27;https://picsum.photos/seed/&#x27; ~ p.id ~ &#x27;/480/300&#x27; }}&quot; alt=&quot;{{ p.name }}&quot;&gt;
+        &lt;div class=&quot;card-body&quot;&gt;
+          &lt;h3&gt;{{ p.name }}&lt;/h3&gt;
+          &lt;p class=&quot;price&quot;&gt;${{ &#x27;%.2f&#x27; % (p.price_cents/100) }}&lt;/p&gt;
+          &lt;p class=&quot;muted&quot;&gt;{{ p.sku }}&lt;/p&gt;
+        &lt;/div&gt;
+      &lt;/div&gt;
+    {% else %}
+      &lt;p&gt;No products yet.&lt;/p&gt;
+    {% endfor %}
+  &lt;/div&gt;
+{% endblock %}
+</code></pre>
+</details><details><summary><code>app/static/styles.css</code></summary>
+<pre><code>:root { --bg:#0b0d12; --card:#111522; --muted:#9aa3b2; --accent:#4f86ff; --text:#e6e9ef; }
+*{box-sizing:border-box;font-family:system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, &#x27;Helvetica Neue&#x27;, Arial;}
+body{margin:0;background:var(--bg);color:var(--text);}
+a{color:var(--accent);text-decoration:none}
+.container{max-width:1100px;margin:0 auto;padding:16px}
+header.header{display:flex;align-items:center;justify-content:space-between}
+header .brand{font-weight:700;font-size:1.2rem}
+header nav a{margin-left:12px}
+.flash{list-style:none;padding:0}
+.flash li{background:#1b2436;padding:8px 12px;margin:8px 0;border-left:4px solid var(--accent);border-radius:8px}
+.flash li.error{border-color:#ff6b6b}
+.grid{display:grid;grid-template-columns:repeat(auto-fill, minmax(240px, 1fr));gap:16px;margin-top:16px}
+.card{background:var(--card);border-radius:16px;overflow:hidden;box-shadow:0 8px 20px rgba(0,0,0,.25)}
+.card img{display:block;width:100%;height:160px;object-fit:cover}
+.card-body{padding:12px}
+.price{font-weight:700}
+form.search{display:flex;gap:8px}
+form.search input{flex:1}
+input, button, textarea{background:#0e1424;border:1px solid #1f2a44;color:var(--text);padding:10px;border-radius:12px}
+button{cursor:pointer}
+button.primary{background:var(--accent);border-color:transparent;color:white;font-weight:700}
+button.secondary{background:#1b2436}
+button.link{background:transparent;border:none;color:var(--accent);padding:0}
+.product-detail{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+.product-detail img{width:100%;height:auto;border-radius:16px}
+table.cart{width:100%;border-collapse:collapse;margin-top:12px}
+table.cart th, table.cart td{border-bottom:1px solid #1f2a44;padding:8px;text-align:left}
+input.qty{width:70px}
+.cart-summary{display:flex;align-items:center;justify-content:space-between;margin-top:12px}
+.actions{display:flex;gap:8px}
+.muted{color:var(--muted);font-size:.9rem}
+.admin-form{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+.admin-form textarea{grid-column:1 / -1;min-height:90px}
+footer.footer{margin-top:40px;border-top:1px solid #1f2a44;padding-top:16px;color:var(--muted)}
+@media (max-width:800px){ .product-detail{grid-template-columns:1fr} }
+</code></pre>
+</details>
+</body></html>

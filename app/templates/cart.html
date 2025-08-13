@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block content %}
+  <h2>Your Cart</h2>
+  {% if lines %}
+    <table class="cart">
+      <thead>
+        <tr><th>Product</th><th>Qty</th><th>Price</th><th>Total</th><th></th></tr>
+      </thead>
+      <tbody>
+      {% for l in lines %}
+        <tr>
+          <td>{{ l.product.name }}</td>
+          <td>
+            <form method="post" action="{{ url_for('main.cart_update') }}">
+              <input type="hidden" name="product_id" value="{{ l.product.id }}">
+              <input class="qty" type="number" name="qty" min="0" value="{{ l.qty }}">
+              <button>Update</button>
+            </form>
+          </td>
+          <td>${{ '%.2f' % (l.product.price_cents/100) }}</td>
+          <td>${{ '%.2f' % (l.line_total_cents/100) }}</td>
+          <td>
+            <form method="post" action="{{ url_for('main.cart_update') }}">
+              <input type="hidden" name="product_id" value="{{ l.product.id }}">
+              <input type="hidden" name="qty" value="0">
+              <button class="link">Remove</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <div class="cart-summary">
+      <strong>Subtotal: ${{ '%.2f' % (total_cents/100) }}</strong>
+      <div class="actions">
+        <form method="post" action="{{ url_for('main.cart_clear') }}">
+          <button type="submit" class="secondary">Clear Cart</button>
+        </form>
+        <a class="primary" href="{{ url_for('checkout.checkout_page') }}">Proceed to Checkout</a>
+      </div>
+    </div>
+  {% else %}
+    <p>Your cart is empty.</p>
+  {% endif %}
+{% endblock %}
