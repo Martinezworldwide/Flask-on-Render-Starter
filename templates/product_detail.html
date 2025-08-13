@@ -1,0 +1,20 @@
+<!doctype html>
+<html>
+<head>
+    <title>{{ product.name }}</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .product-detail { max-width: 400px; }
+    </style>
+</head>
+<body>
+    <h1>{{ product.name }}</h1>
+    <p>{{ product.description }}</p>
+    <p>Price: ${{ product.price }}</p>
+    <form method="post" action="{{ url_for('checkout') }}">
+        <input type="hidden" name="product_id" value="{{ product.id }}">
+        <button type="submit">Buy Now</button>
+    </form>
+    <p><a href="{{ url_for('home') }}">Back to store</a></p>
+</body>
+</html>

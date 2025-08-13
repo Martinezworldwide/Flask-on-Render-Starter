@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+<head>
+    <title>E-Commerce Demo</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .product { border: 1px solid #ccc; padding: 10px; margin: 10px; display: inline-block; width: 200px; }
+        .flash { padding: 10px; margin-bottom: 10px; border-radius: 5px; }
+        .flash.success { background: #d4edda; color: #155724; }
+        .flash.error { background: #f8d7da; color: #721c24; }
+    </style>
+</head>
+<body>
+    <h1>Welcome to Our Store</h1>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="flash {{ category }}">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+    {% for product in products %}
+        <div class="product">
+            <h3>{{ product.name }}</h3>
+            <p>${{ product.price }}</p>
+            <p><a href="{{ url_for('product_detail', product_id=product.id) }}">View Details</a></p>
+        </div>
+    {% endfor %}
+</body>
+</html>
